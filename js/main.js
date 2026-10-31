@@ -14,6 +14,7 @@
     active: 0,
     ad: null,
     key: { sim: 0.26, smooth: 0.08 },
+    tiktok: "blur",
     analysisToken: 0,
     exporting: false
   };
@@ -63,7 +64,8 @@
     chatLog: $("#chatLog"),
     chatChips: $("#chatChips"),
     chatForm: $("#chatForm"),
-    chatInput: $("#chatInput")
+    chatInput: $("#chatInput"),
+    tiktokMode: $("#tiktokMode")
   };
 
   /* ---------------- player ---------------- */
@@ -611,12 +613,18 @@
     return U.baseName(state.file.name) + "-part-" + U.pad2(i + 1) + (suffix || "") + ".mp4";
   }
 
+  function tkSuffix() { return state.tiktok && state.tiktok !== "off" ? "-tiktok" : ""; }
+
+  els.tiktokMode.addEventListener("change", function () {
+    state.tiktok = els.tiktokMode.value;
+  });
+
   function downloadChunk(i) {
     const c = state.chunks[i];
     if (!c) return;
     withExport("Готовлю часть " + (i + 1), async function () {
-      const blob = await exporter.cut({ file: state.file, chunk: c, onStatus: function (t, p, d) { jobProgress(p, d); } });
-      U.downloadBlob(blob, outName(i));
+      const blob = await exporter.cut({ file: state.file, chunk: c, width: state.width, height: state.height, tiktok: state.tiktok, onStatus: function (t, p, d) { jobProgress(p, d); } });
+      U.downloadBlob(blob, outName(i, tkSuffix()));
       U.toast("Часть " + (i + 1) + " скачана");
     });
   }
@@ -638,9 +646,10 @@
         key: state.key,
         width: state.width,
         height: state.height,
+        tiktok: state.tiktok,
         onStatus: function (t, p, d) { jobProgress(p, d); }
       });
-      U.downloadBlob(blob, outName(i, "-with-ad"));
+      U.downloadBlob(blob, outName(i, tkSuffix() + "-with-ad"));
       U.toast("Часть " + (i + 1) + " с рекламой скачана");
     });
   }
@@ -652,8 +661,8 @@
       let ok = true;
       await withExport("Скачиваю часть " + (i + 1) + " из " + n, async function () {
         try {
-          const blob = await exporter.cut({ file: state.file, chunk: state.chunks[i], onStatus: function (t, p, d) { jobProgress(p, d); } });
-          U.downloadBlob(blob, outName(i));
+          const blob = await exporter.cut({ file: state.file, chunk: state.chunks[i], width: state.width, height: state.height, tiktok: state.tiktok, onStatus: function (t, p, d) { jobProgress(p, d); } });
+          U.downloadBlob(blob, outName(i, tkSuffix()));
         } catch (e) {
           ok = false;
           throw e;

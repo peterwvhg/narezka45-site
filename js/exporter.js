@@ -6,6 +6,39 @@
     return s === "-0" ? "0" : s;
   }
 
+  /* Подгонка под TikTok: вертикаль 9:16, 1080x1920, H.264 + AAC, MP4.
+     Если исходник уже 9:16 — разрешение не трогаем (апскейл качества не добавляет). */
+  function even(n) { n = Math.round(n); return Math.max(2, n % 2 === 0 ? n : n - 1); }
+
+  function tiktokPlan(srcW, srcH, mode) {
+    if (!mode || mode === "off") return null;
+    const sw = srcW || 0, sh = srcH || 0;
+    const ar = sw && sh ? sw / sh : 0;
+    const native = ar && Math.abs(ar - 9 / 16) < 0.015;
+    const W = native ? even(sw) : 1080;
+    const H = native ? even(sh) : 1920;
+    return {
+      W: W, H: H, native: native,
+      build: function (inLabel, outLabel, id) {
+        const i = inLabel, o = outLabel, u = id || "t";
+        if (native) return "[" + i + "]scale=" + W + ":" + H + ":flags=lanczos,setsar=1[" + o + "]";
+        if (mode === "fill") {
+          // Сначала режем исходный кадр до пропорции 9:16, потом масштабируем: так в разы быстрее.
+          return "[" + i + "]crop=w='trunc(min(iw,ih*" + W + "/" + H + ")/2)*2':h='trunc(min(ih,iw*" + H + "/" + W + ")/2)*2'," +
+            "scale=" + W + ":" + H + ":flags=lanczos,setsar=1[" + o + "]";
+        }
+        if (mode === "blur") {
+          return "[" + i + "]split[" + u + "a][" + u + "b];" +
+            "[" + u + "a]scale=270:480:force_original_aspect_ratio=increase,crop=270:480,boxblur=10:2,scale=" + W + ":" + H + ",setsar=1[" + u + "bg];" +
+            "[" + u + "b]scale=" + W + ":" + H + ":force_original_aspect_ratio=decrease:flags=lanczos[" + u + "fg];" +
+            "[" + u + "bg][" + u + "fg]overlay=(W-w)/2:(H-h)/2,format=yuv420p[" + o + "]";
+        }
+        return "[" + i + "]scale=" + W + ":" + H + ":force_original_aspect_ratio=decrease:flags=lanczos," +
+          "pad=" + W + ":" + H + ":(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[" + o + "]";
+      }
+    };
+  }
+
   function Exporter(opts) {
     opts = opts || {};
     this.onStatus = opts.onStatus || function () {};
@@ -148,10 +181,13 @@
 
     this.logs.length = 0;
     const outName = "part_" + Date.now() + ".mp4";
-    const args = ["-y", "-hide_banner", "-ss", num(chunk.start), "-i", mounted.name, "-t", num(chunk.dur), "-map", "0:v:0"];
-    if (srcInfo.hasAudio) args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", "128k");
+    const plan = tiktokPlan(opts.width, opts.height, opts.tiktok);
+    const args = ["-y", "-hide_banner", "-ss", num(chunk.start), "-i", mounted.name, "-t", num(chunk.dur)];
+    if (plan) args.push("-filter_complex", plan.build("0:v:0", "outv", "c"), "-map", "[outv]");
+    else args.push("-map", "0:v:0");
+    if (srcInfo.hasAudio) args.push("-map", "0:a:0", "-c:a", "aac", "-b:a", plan ? "192k" : "128k", "-ar", "48000");
     else args.push("-an");
-    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outName);
+    args.push("-c:v", "libx264", "-preset", "ultrafast", "-crf", plan ? "18" : "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", outName);
 
     try {
       await this.ffmpeg.exec(args);
@@ -171,10 +207,12 @@
     const adFile = opts.adFile;
     const adDur = Math.max(0.5, opts.adDur || 0);
     const key = opts.key || {};
+    const plan = tiktokPlan(opts.width, opts.height, opts.tiktok);
     let W = Math.max(2, Math.round(opts.width || 1280));
     let H = Math.max(2, Math.round(opts.height || 720));
     W = W % 2 === 0 ? W : W - 1;
     H = H % 2 === 0 ? H : H - 1;
+    if (plan) { W = plan.W; H = plan.H; }
 
     await this.ensure();
     await this.mount(file);
@@ -200,8 +238,15 @@
     filter.push("[1:v]scale=" + W + ":" + H + ":force_original_aspect_ratio=decrease,format=yuv420p" +
       ",colorkey=color=0x00FF00:similarity=" + num(sim) + ":blend=" + num(blend) +
       ",pad=" + W + ":" + H + ":(ow-iw)/2:(oh-ih)/2:color=black@0,format=rgba[keyed]");
-    filter.push("[0:v]trim=0:" + num(MID) + ",setpts=PTS-STARTPTS[v1]");
-    filter.push("[0:v]trim=" + num(MID) + ":" + num(END) + ",setpts=PTS-STARTPTS,split[rest][fs]");
+    // Метка фильтра читается один раз, поэтому после подгонки под TikTok размножаем кадр через split.
+    let vin1 = "0:v", vin2 = "0:v";
+    if (plan) {
+      filter.push(plan.build("0:v", "nv", "b"));
+      filter.push("[nv]split[nva][nvb]");
+      vin1 = "nva"; vin2 = "nvb";
+    }
+    filter.push("[" + vin1 + "]trim=0:" + num(MID) + ",setpts=PTS-STARTPTS[v1]");
+    filter.push("[" + vin2 + "]trim=" + num(MID) + ":" + num(END) + ",setpts=PTS-STARTPTS,split[rest][fs]");
     filter.push("[fs]trim=0:0.04,setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=" + num(adDur) + ",setpts=PTS-STARTPTS[freeze]");
     filter.push("[freeze][keyed]overlay=format=auto,format=yuv420p[adv]");
 
@@ -244,8 +289,8 @@
     const args = ["-y", "-hide_banner", "-ss", num(chunk.start), "-t", num(chunk.dur), "-i", this.mounted.name, "-i", this._adMounted.name];
     if (needsSilent) args.push("-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000");
     args.push("-filter_complex", filter.join(";"), "-map", "[outv]", "-map", "[outa]",
-      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
-      "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", outName);
+      "-c:v", "libx264", "-preset", "ultrafast", "-crf", plan ? "18" : "23", "-pix_fmt", "yuv420p",
+      "-c:a", "aac", "-b:a", plan ? "192k" : "128k", "-movflags", "+faststart", outName);
 
     this.logs.length = 0;
     try {

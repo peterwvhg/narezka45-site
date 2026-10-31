@@ -99,6 +99,23 @@
         </div>
       </div>
 
+      <section class="format-card" id="formatCard" aria-labelledby="formatTitle">
+        <div class="format-head">
+          <span class="eyebrow">Формат</span>
+          <h2 id="formatTitle">Под TikTok без потери качества</h2>
+          <p class="muted small">Скачанные части и части с рекламой получатся в MP4 (H.264 + AAC), вертикально 9:16, 1080×1920. Реклама подгоняется под тот же кадр. Если видео уже 9:16, его размер не меняется.</p>
+        </div>
+        <label class="format-select">
+          <span>Как вписать в кадр</span>
+          <select id="tiktokMode">
+            <option value="blur" selected>Размытый фон (без обрезки)</option>
+            <option value="fit">Чёрные поля (без обрезки)</option>
+            <option value="fill">Обрезать по краям (на весь кадр)</option>
+            <option value="off">Не менять формат</option>
+          </select>
+        </label>
+      </section>
+
       <section class="ad-card" id="adCard" aria-labelledby="adTitle">
         <div class="ad-card-head">
           <div>
